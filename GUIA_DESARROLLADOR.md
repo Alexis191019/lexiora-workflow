@@ -26,24 +26,24 @@ git clone <URL_DEL_REPO>
 cd workflow_Lexiora
 ```
 
-### Paso 2 — Configurar credenciales en `.env`
+### Paso 2 — Configurar el `.env`
+
+> **Aclaración importante**: el `.env` solo contiene variables de **infraestructura** que Docker y n8n necesitan para arrancar. Las API keys de OpenAI, Supabase y WhatsApp **no van aquí** — se ingresan directamente en el panel de credenciales de n8n (paso 7), donde quedan cifradas y seguras.
 
 ```bash
 cp .env.example .env
 ```
 
-Abrir `.env` y rellenar con las credenciales del cliente (ver `GUIA_CREDENCIALES.md` para saber cómo obtener cada una):
+Abrir `.env` y rellenar:
 
 ```
-OPENAI_API_KEY=sk-...
-SUPABASE_URL=https://xxxx.supabase.co
-SUPABASE_SERVICE_KEY=eyJ...
-WHATSAPP_API_TOKEN=EAAxx...
-WHATSAPP_PHONE_NUMBER_ID=12345...
-N8N_WEBHOOK_URL=https://xxxx.ngrok-free.app   # temporal, ver paso 5
+# Obligatorias para arrancar n8n
 N8N_USER=admin
 N8N_PASSWORD=contraseña_segura_aqui
-N8N_ENCRYPTION_KEY=# generar con: openssl rand -hex 32
+N8N_ENCRYPTION_KEY=   # generar con: openssl rand -hex 32
+N8N_WEBHOOK_URL=https://xxxx.ngrok-free.app   # temporal, ver paso 5
+
+# Variables de negocio usadas dentro de los workflows
 FLOW_API_KEY=...
 FLOW_SECRET_KEY=...
 FLOW_API_URL=https://sandbox.flow.cl/api      # sandbox para pruebas
