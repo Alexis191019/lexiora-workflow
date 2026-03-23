@@ -1,0 +1,35 @@
+[
+  {
+    "content": "La valoración de enfermería es la primera etapa del proceso de enfermería. Consiste en la recolección sistemática y continua de datos sobre el estado de salud del paciente. Incluye la entrevista clínica, la exploración física (inspección, palpación, percusión y auscultación) y la revisión de registros clínicos anteriores.",
+    "metadata": {
+      "fuente": "Fundamentos de Enfermería — Potter & Perry",
+      "numero": "Capítulo 7",
+      "titulo": "Proceso de Enfermería — Valoración",
+      "fecha": "2023-01-01",
+      "materia": "proceso_enfermeria",
+      "especialidad": "enfermeria_general"
+    }
+  },
+  {
+    "content": "La escala de Glasgow evalúa el nivel de consciencia del paciente mediante tres parámetros: apertura ocular (1-4 puntos), respuesta verbal (1-5 puntos) y respuesta motora (1-6 puntos). Puntuación máxima: 15 (consciencia plena). Puntuación menor a 8 indica coma severo y necesidad de manejo de vía aérea.",
+    "metadata": {
+      "fuente": "Manual de Urgencias y Emergencias — OPS",
+      "numero": "Sección 3.2",
+      "titulo": "Escala de Coma de Glasgow",
+      "fecha": "2023-01-01",
+      "materia": "neurologia",
+      "especialidad": "urgencias"
+    }
+  },
+  {
+    "content": "Protocolo de lavado de manos OMS — Los 5 momentos del lavado de manos: 1) Antes del contacto con el paciente. 2) Antes de realizar una tarea limpia/aséptica. 3) Después del riesgo de exposición a fluidos corporales. 4) Después del contacto con el paciente. 5) Después del contacto con el entorno del paciente. Técnica: fricción con solución alcohólica durante 20-30 segundos o lavado con agua y jabón durante 40-60 segundos.",
+    "metadata": {
+      "fuente": "OMS — Guías de Higiene de Manos",
+      "numero": "WHO/IER/PSP/2009.07",
+      "titulo": "Los 5 momentos del lavado de manos",
+      "fecha": "2023-01-01",
+      "materia": "prevencion_infecciones",
+      "especialidad": "enfermeria_general"
+    }
+  }
+]

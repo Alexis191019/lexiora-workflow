@@ -1,0 +1,16 @@
+# Credenciales reales — NUNCA subir al repo
+.env
+.env.local
+.env.*.local
+
+# Archivos de Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Datos locales de n8n (si se monta el volumen en disco en vez de Docker volume)
+.n8n/
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
