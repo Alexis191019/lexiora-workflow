@@ -15,11 +15,8 @@ services:
       - N8N_LOG_LEVEL=warn
 
       # ── Variables de negocio (accesibles como $env.XXX en los workflows) ──
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - SUPABASE_URL=${SUPABASE_URL}
-      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
-      - WHATSAPP_API_TOKEN=${WHATSAPP_API_TOKEN}
-      - WHATSAPP_PHONE_NUMBER_ID=${WHATSAPP_PHONE_NUMBER_ID}
+      # OpenAI, Supabase y WhatsApp NO van aquí — se configuran en
+      # n8n → Credentials → Add credential (quedan cifradas con N8N_ENCRYPTION_KEY)
       - FLOW_API_KEY=${FLOW_API_KEY}
       - FLOW_SECRET_KEY=${FLOW_SECRET_KEY}
       - FLOW_API_URL=${FLOW_API_URL}

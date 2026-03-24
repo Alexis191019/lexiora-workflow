@@ -44,9 +44,9 @@ El servidor es el computador en internet donde vivirá el sistema las 24 horas.
 
 **📋 Datos a guardar y entregar al desarrollador:**
 ```
-IP del servidor: ___________________ (ej: 143.198.45.123)
+IP del servidor: 161.35.132.126 (ej: 143.198.45.123)
 Usuario:         root
-Contraseña:      ___________________ (la que creó en el paso 1.4)
+Contraseña:      lexiora2026Ia (la que creó en el paso 1.4)
 ```
 
 ---
