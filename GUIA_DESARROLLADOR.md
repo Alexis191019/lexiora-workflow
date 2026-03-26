@@ -44,8 +44,9 @@ N8N_ENCRYPTION_KEY=   # generar con: openssl rand -hex 32
 N8N_WEBHOOK_URL=https://xxxx.ngrok-free.app   # temporal, ver paso 5
 
 # Variables de negocio usadas dentro de los workflows
-MP_ACCESS_TOKEN=TEST-...     # credencial de Mercado Pago (TEST- para sandbox)
-MP_WEBHOOK_SECRET=...        # clave secreta para validar webhooks de MP
+FLOW_API_KEY=...             # clave pública de Flow
+FLOW_SECRET_KEY=...          # clave privada para firmar peticiones HMAC-SHA256
+FLOW_API_URL=https://sandbox.flow.cl/api   # sandbox para pruebas
 PRECIO_CLP=2990
 ```
 
@@ -256,7 +257,7 @@ nano .env   # editar con las credenciales reales del cliente
 
 Cambios respecto al `.env` de desarrollo:
 - `N8N_WEBHOOK_URL=https://n8n.lexiora.cl`  (dominio real, sin ngrok)
-- `MP_ACCESS_TOKEN=APP_USR-...`              (cambiar de TEST- a APP_USR- de producción)
+- `FLOW_API_URL=https://www.flow.cl/api`     (cambiar de sandbox a producción)
 
 ### Paso 6 — Configurar Nginx
 
