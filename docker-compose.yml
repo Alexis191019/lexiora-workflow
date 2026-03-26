@@ -17,9 +17,8 @@ services:
       # ── Variables de negocio (accesibles como $env.XXX en los workflows) ──
       # OpenAI, Supabase y WhatsApp NO van aquí — se configuran en
       # n8n → Credentials → Add credential (quedan cifradas con N8N_ENCRYPTION_KEY)
-      - FLOW_API_KEY=${FLOW_API_KEY}
-      - FLOW_SECRET_KEY=${FLOW_SECRET_KEY}
-      - FLOW_API_URL=${FLOW_API_URL}
+      - MP_ACCESS_TOKEN=${MP_ACCESS_TOKEN}
+      - MP_WEBHOOK_SECRET=${MP_WEBHOOK_SECRET}
       - PRECIO_CLP=${PRECIO_CLP}
     volumes:
       - n8n_data:/home/node/.n8n

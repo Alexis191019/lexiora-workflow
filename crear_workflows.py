@@ -345,7 +345,7 @@ def build_workflow_rag():
                 "options": {}
             }
         },
-        # 7. HTTP: Generar link de pago en Flow (rama false de ¿Tiene Créditos?)
+        # 7. HTTP: Generar link de pago en Mercado Pago (rama false de ¿Tiene Créditos?)
         {
             "name": "Generar Link Pago",
             "type": "n8n-nodes-base.httpRequest",
@@ -353,24 +353,32 @@ def build_workflow_rag():
             "position": [1500, 150],
             "parameters": {
                 "method": "POST",
-                "url": "={{ $env.FLOW_API_URL }}/payment/create",
+                "url": "https://api.mercadopago.com/checkout/preferences",
                 "sendHeaders": True,
                 "headerParameters": {
-                    "parameters": [{"name": "Content-Type", "value": "application/json"}]
+                    "parameters": [
+                        {"name": "Authorization", "value": "=Bearer {{ $env.MP_ACCESS_TOKEN }}"},
+                        {"name": "Content-Type", "value": "application/json"}
+                    ]
                 },
                 "sendBody": True,
                 "contentType": "raw",
                 "rawContentType": "application/json",
                 "body": (
                     '={{ JSON.stringify({'
-                    'apiKey: $env.FLOW_API_KEY,'
-                    'commerceOrder: $json.usuario_id + "-" + Date.now(),'
-                    'subject: "Lexiora — 20 consultas legales",'
-                    'currency: "CLP",'
-                    'amount: parseInt($env.PRECIO_CLP),'
-                    'email: "usuario@lexiora.cl",'
-                    'urlConfirmation: $env.N8N_WEBHOOK_URL + "/webhook/payment",'
-                    'urlReturn: "https://lexiora.cl/gracias"'
+                    'items: [{'
+                    '  title: "Lexiora — 20 consultas legales",'
+                    '  quantity: 1,'
+                    '  unit_price: parseInt($env.PRECIO_CLP),'
+                    '  currency_id: "CLP"'
+                    '}],'
+                    'external_reference: $json.usuario_id,'
+                    'notification_url: $env.N8N_WEBHOOK_URL + "/webhook/payment",'
+                    'back_urls: {'
+                    '  success: "https://lexiora.cl/gracias",'
+                    '  failure: "https://lexiora.cl/error",'
+                    '  pending: "https://lexiora.cl/pendiente"'
+                    '}'
                     '}) }}'
                 )
             }
@@ -380,7 +388,7 @@ def build_workflow_rag():
             "Enviar Cobro WhatsApp", 1750, 150,
             '"⚠️ Has agotado tus consultas gratuitas de Lexiora.\\n\\n"'
             ' + "Para continuar, adquiere un paquete de 20 consultas por $" + $env.PRECIO_CLP + " CLP:\\n\\n"'
-            ' + $json.url',
+            ' + $json.init_point',
             phone_expr="$('¿Tiene Créditos?').first().json.phone"
         ),
         # 9. HTTP: Sanitizar pregunta con OpenAI
@@ -668,39 +676,52 @@ def build_workflow_rag():
 # WORKFLOW 2: lexiora-payment-webhook
 # ─────────────────────────────────────────────
 
-JS_VALIDAR_FIRMA_FLOW = r"""
-// Valida la firma HMAC-SHA256 del webhook de Flow
+JS_VALIDAR_FIRMA_MP = r"""
+// Valida la firma del webhook de Mercado Pago y obtiene detalles del pago
 const crypto = require('crypto');
 const body = $json.body || $json;
-const rawBody = JSON.stringify(body);
-const secretKey = $env.FLOW_SECRET_KEY;
 
-// Flow envía la firma en el header 'x-flow-signature'
-const receivedSig = $json.headers?.['x-flow-signature'] || $json.headers?.['x-flow-sig'] || '';
+const xSignature = $json.headers?.['x-signature'] || '';
+const xRequestId = $json.headers?.['x-request-id'] || '';
+const paymentId = body.data?.id || '';
+const type = body.type || '';
 
-// Calcular firma esperada
-const expectedSig = crypto.createHmac('sha256', secretKey).update(rawBody).digest('hex');
-
-if (receivedSig && receivedSig !== expectedSig) {
-  throw new Error('FIRMA_INVALIDA: webhook no proviene de Flow');
+// Solo procesar notificaciones de tipo 'payment'
+if (type !== 'payment') {
+  return [{ json: { valido: false, skip: true, reason: 'not_payment', type } }];
 }
 
-// Extraer datos del pago
-const token = body.token || body.commerceOrder?.split('-')[0];
-const commerceOrder = body.commerceOrder || body.commerce_order || '';
-const usuarioId = commerceOrder.split('-')[0];  // formato: usuarioId-timestamp
-const status = body.status || body.paymentStatus;
-const monto = body.amount || body.total || 0;
+// Validar firma HMAC si está configurado el secret
+if ($env.MP_WEBHOOK_SECRET && xSignature) {
+  const parts = xSignature.split(',');
+  let ts = '', v1 = '';
+  for (const part of parts) {
+    const [key, val] = part.split('=');
+    if (key?.trim() === 'ts') ts = val?.trim();
+    if (key?.trim() === 'v1') v1 = val?.trim();
+  }
+  const manifest = `id:${paymentId};request-id:${xRequestId};ts:${ts}`;
+  const expectedSig = crypto.createHmac('sha256', $env.MP_WEBHOOK_SECRET).update(manifest).digest('hex');
+  if (v1 && v1 !== expectedSig) {
+    throw new Error('FIRMA_INVALIDA: webhook no proviene de Mercado Pago');
+  }
+}
+
+// Obtener detalles del pago desde la API de Mercado Pago
+const payment = await $helpers.httpRequest({
+  method: 'GET',
+  url: `https://api.mercadopago.com/v1/payments/${paymentId}`,
+  headers: { 'Authorization': `Bearer ${$env.MP_ACCESS_TOKEN}` }
+});
 
 return [{ json: {
   valido: true,
-  usuarioId,
-  token,
-  comercio_orden: commerceOrder,
-  status,
-  monto,
-  proveedor: 'flow',
-  raw: body
+  paymentId,
+  usuarioId: payment.external_reference,
+  status: payment.status,
+  monto: payment.transaction_amount,
+  proveedor: 'mercadopago',
+  raw: payment
 } }];
 """.strip()
 
@@ -777,15 +798,15 @@ def build_workflow_payment():
                 "options": {}
             }
         },
-        # 2. Code: Validar firma HMAC de Flow
+        # 2. Code: Validar firma y obtener detalles del pago desde Mercado Pago
         {
-            "name": "Validar Firma Flow",
+            "name": "Validar Firma MP",
             "type": "n8n-nodes-base.code",
             "typeVersion": 2,
             "position": [500, 300],
-            "parameters": {"mode": "runOnceForAllItems", "jsCode": JS_VALIDAR_FIRMA_FLOW}
+            "parameters": {"mode": "runOnceForAllItems", "jsCode": JS_VALIDAR_FIRMA_MP}
         },
-        # 3. IF: ¿Es pago confirmado?
+        # 3. IF: ¿Es pago aprobado?
         {
             "name": "¿Pago Confirmado?",
             "type": "n8n-nodes-base.if",
@@ -797,7 +818,7 @@ def build_workflow_payment():
                     "conditions": [{
                         "id": "check-status",
                         "leftValue": "={{ $json.status }}",
-                        "rightValue": "1",
+                        "rightValue": "approved",
                         "operator": {"type": "string", "operation": "equals"}
                     }],
                     "combinator": "and"
@@ -821,9 +842,9 @@ def build_workflow_payment():
             ' + "🎉 Créditos actuales: " + $json.creditosNuevos + "\\n\\n"'
             ' + "Ya puedes continuar con tus consultas legales en Lexiora. 📚"'
         ),
-        # 6. HTTP: Responder 200 OK al webhook de Flow
+        # 6. HTTP: Responder 200 OK al webhook de Mercado Pago
         {
-            "name": "Responder OK a Flow",
+            "name": "Responder OK a MP",
             "type": "n8n-nodes-base.respondToWebhook",
             "typeVersion": 1,
             "position": [1500, 300],
@@ -835,16 +856,16 @@ def build_workflow_payment():
     ]
 
     connections = {
-        "Webhook Pago":             {"main": [[{"node": "Validar Firma Flow", "type": "main", "index": 0}]]},
-        "Validar Firma Flow":       {"main": [[{"node": "¿Pago Confirmado?", "type": "main", "index": 0}]]},
+        "Webhook Pago":             {"main": [[{"node": "Validar Firma MP", "type": "main", "index": 0}]]},
+        "Validar Firma MP":         {"main": [[{"node": "¿Pago Confirmado?", "type": "main", "index": 0}]]},
         "¿Pago Confirmado?": {
             "main": [
-                [{"node": "Acreditar Créditos", "type": "main", "index": 0}],   # true
-                [{"node": "Responder OK a Flow", "type": "main", "index": 0}]   # false (pago no confirmado, ej: pendiente)
+                [{"node": "Acreditar Créditos", "type": "main", "index": 0}],   # true (approved)
+                [{"node": "Responder OK a MP", "type": "main", "index": 0}]    # false (pending, rejected, etc.)
             ]
         },
-        "Acreditar Créditos":       {"main": [[{"node": "Notificar Recarga WhatsApp", "type": "main", "index": 0}]]},
-        "Notificar Recarga WhatsApp": {"main": [[{"node": "Responder OK a Flow", "type": "main", "index": 0}]]},
+        "Acreditar Créditos":         {"main": [[{"node": "Notificar Recarga WhatsApp", "type": "main", "index": 0}]]},
+        "Notificar Recarga WhatsApp": {"main": [[{"node": "Responder OK a MP", "type": "main", "index": 0}]]},
     }
 
     return {

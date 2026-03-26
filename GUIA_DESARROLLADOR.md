@@ -44,9 +44,8 @@ N8N_ENCRYPTION_KEY=   # generar con: openssl rand -hex 32
 N8N_WEBHOOK_URL=https://xxxx.ngrok-free.app   # temporal, ver paso 5
 
 # Variables de negocio usadas dentro de los workflows
-FLOW_API_KEY=...
-FLOW_SECRET_KEY=...
-FLOW_API_URL=https://sandbox.flow.cl/api      # sandbox para pruebas
+MP_ACCESS_TOKEN=TEST-...     # credencial de Mercado Pago (TEST- para sandbox)
+MP_WEBHOOK_SECRET=...        # clave secreta para validar webhooks de MP
 PRECIO_CLP=2990
 ```
 
@@ -257,7 +256,7 @@ nano .env   # editar con las credenciales reales del cliente
 
 Cambios respecto al `.env` de desarrollo:
 - `N8N_WEBHOOK_URL=https://n8n.lexiora.cl`  (dominio real, sin ngrok)
-- `FLOW_API_URL=https://www.flow.cl/api`     (producción, no sandbox)
+- `MP_ACCESS_TOKEN=APP_USR-...`              (cambiar de TEST- a APP_USR- de producción)
 
 ### Paso 6 — Configurar Nginx
 
@@ -384,7 +383,7 @@ certbot renew --dry-run   # simular renovación sin aplicar
 | n8n (producción) | `https://n8n.lexiora.cl` | Panel en el servidor |
 | Supabase | `https://xxxx.supabase.co` | Dashboard de la BD |
 | Webhook WhatsApp | `https://n8n.lexiora.cl/webhook/whatsapp` | Recibe mensajes |
-| Webhook pagos | `https://n8n.lexiora.cl/webhook/payment` | Recibe confirmaciones Flow |
+| Webhook pagos | `https://n8n.lexiora.cl/webhook/payment` | Recibe confirmaciones Mercado Pago |
 
 ---
 

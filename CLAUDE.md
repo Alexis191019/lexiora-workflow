@@ -331,45 +331,38 @@ CREATE TABLE pagos (
 - **Al quedar ≤ 3 créditos**: aviso al final de la respuesta ("Te quedan X consultas disponibles")
 - **Al recibir pago confirmado**: mensaje de bienvenida con saldo actualizado
 
-## Integración de Pagos — Recomendación para Chile
+## Integración de Pagos — Mercado Pago
 
-### Recomendación Principal: Flow
+El proyecto usa **Mercado Pago** como procesador de pagos.
 
-**Flow** (`flow.cl`) es la opción recomendada por las siguientes razones:
-- Plataforma chilena, diseñada para el mercado local
-- Soporta **Webpay Plus (Transbank)**, que es el método de pago más confiado por los chilenos
-- Soporta tarjetas de crédito/débito y transferencias bancarias
-- API REST simple con generación de **links de pago** (no requiere página de checkout propia)
-- **Webhooks** de confirmación de pago fáciles de recibir en n8n (HTTP Request node)
-- Tarifa: ~2% por transacción sin mensualidad fija
-
-**Flujo de pago con Flow en n8n:**
+**Flujo de pago en n8n:**
 ```
-[n8n] POST /api/payment/create → Flow API
-      { commerceOrder, subject, currency, amount, email, urlConfirmation, urlReturn }
-      ← { url, token }
+[n8n] POST /checkout/preferences → Mercado Pago API
+      { items, external_reference: usuario_id, notification_url, back_urls }
+      ← { init_point }   ← URL de pago que se envía al usuario
 
-[n8n] → Enviar URL de pago al usuario por WhatsApp
+[n8n] → Enviar init_point al usuario por WhatsApp
 
-[Flow] → Webhook POST a lexiora-payment-webhook cuando el pago se confirma
+[MP]  → Webhook POST a /webhook/payment cuando el pago se procesa
+        { type: "payment", data: { id: "12345" } }
+
+[n8n] → GET /v1/payments/12345 → obtiene status y external_reference
+      → Si status == "approved" → acreditar créditos
 ```
 
-### Alternativa: Mercado Pago
-- Mayor documentación y comunidad
-- Más conocido en Latinoamérica, menos arraigado en Chile para pagos B2C
-- Tiene un nodo de comunidad en n8n (`n8n-nodes-mercadopago`)
-- La confirmación también es por webhook (`payment.updated`)
-- Recomendado si el público objetivo incluye usuarios fuera de Chile
+**Validación de webhooks:** Mercado Pago firma cada notificación con HMAC-SHA256.
+El secret se obtiene en MP → Tu negocio → Notificaciones IPN → Clave secreta.
+El manifest a firmar es: `id:{paymentId};request-id:{x-request-id};ts:{ts}`
 
 ### Variables de entorno de pagos
 ```
-FLOW_API_KEY=...
-FLOW_SECRET_KEY=...    # para validar firma HMAC de webhooks
-FLOW_API_URL=https://www.flow.cl/api   # producción
-# o https://sandbox.flow.cl/api        # desarrollo/pruebas
-
-PRECIO_CLP=2990        # precio del paquete de 20 créditos en CLP
+MP_ACCESS_TOKEN=APP_USR-...   # usar TEST-... para sandbox
+MP_WEBHOOK_SECRET=...         # para validar firma HMAC de webhooks
+PRECIO_CLP=2990               # precio del paquete de 20 créditos en CLP
 ```
+
+**Sandbox:** En MP → Tu negocio → Credenciales, usar las credenciales de "Pruebas" (prefijo `TEST-`).
+Las tarjetas de prueba están en: developers.mercadopago.com/es/docs/checkout-pro/additional-content/test-cards
 
 ## Seguridad: Sanitización y Anti Prompt Injection
 
