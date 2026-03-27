@@ -259,39 +259,50 @@ Cambios respecto al `.env` de desarrollo:
 - `N8N_WEBHOOK_URL=https://n8n.lexiora.cl`  (dominio real, sin ngrok)
 - `FLOW_API_URL=https://www.flow.cl/api`     (cambiar de sandbox a producción)
 
-### Paso 6 — Configurar Nginx
+### Paso 6 — Configurar Nginx y obtener SSL
 
+> **Importante:** el certificado SSL debe obtenerse ANTES de activar la configuración HTTPS,
+> de lo contrario nginx falla al arrancar porque el archivo del certificado no existe aún.
+
+**6.1 — Crear config temporal HTTP para que Certbot pueda validar el dominio:**
 ```bash
-cp nginx/lexiora.conf /etc/nginx/sites-available/lexiora
-
-# Editar el archivo para reemplazar el dominio de ejemplo
-nano /etc/nginx/sites-available/lexiora
-# Reemplazar "n8n.tudominio.cl" por el dominio real, ej: "n8n.lexiora.cl"
-
-# Activar el sitio
-ln -s /etc/nginx/sites-available/lexiora /etc/nginx/sites-enabled/lexiora
-
-# Quitar el sitio default de nginx para evitar conflictos
 rm -f /etc/nginx/sites-enabled/default
 
-# Verificar configuración
-nginx -t
+cat > /etc/nginx/sites-available/lexiora << 'EOF'
+server {
+    listen 80;
+    server_name n8n.lexiora.cl;
+    location / {
+        return 200 'ok';
+        add_header Content-Type text/plain;
+    }
+}
+EOF
 
-# Reiniciar nginx
-systemctl restart nginx
+ln -s /etc/nginx/sites-available/lexiora /etc/nginx/sites-enabled/lexiora
+nginx -t && systemctl restart nginx
 ```
 
-### Paso 7 — Obtener SSL con Let's Encrypt
-
+**6.2 — Obtener el certificado SSL con Certbot:**
 ```bash
 certbot --nginx -d n8n.lexiora.cl
 ```
+Certbot pedirá tu email y aceptar los términos. Genera el certificado y lo renueva automáticamente.
 
-Certbot pedirá un email para notificaciones y aceptar los términos. Luego configura HTTPS automáticamente.
-
-El SSL se renueva automáticamente (Certbot instala un cron job). Para verificar:
+Para verificar la renovación automática:
 ```bash
 certbot renew --dry-run
+```
+
+**6.3 — Reemplazar con la configuración definitiva del proyecto:**
+```bash
+cp /root/lexiora-workflow/nginx/lexiora.conf /etc/nginx/sites-available/lexiora
+
+# Reemplazar el dominio de ejemplo por el real
+sed -i 's/n8n.tudominio.cl/n8n.lexiora.cl/g' /etc/nginx/sites-available/lexiora
+
+# Verificar y reiniciar
+nginx -t && systemctl restart nginx
 ```
 
 ### Paso 8 — Levantar n8n en producción
@@ -384,7 +395,7 @@ certbot renew --dry-run   # simular renovación sin aplicar
 | n8n (producción) | `https://n8n.lexiora.cl` | Panel en el servidor |
 | Supabase | `https://xxxx.supabase.co` | Dashboard de la BD |
 | Webhook WhatsApp | `https://n8n.lexiora.cl/webhook/whatsapp` | Recibe mensajes |
-| Webhook pagos | `https://n8n.lexiora.cl/webhook/payment` | Recibe confirmaciones Mercado Pago |
+| Webhook pagos | `https://n8n.lexiora.cl/webhook/payment` | Recibe confirmaciones Flow |
 
 ---
 

@@ -52,7 +52,7 @@ Usuario (WhatsApp)
 | Embeddings | OpenAI (`text-embedding-3-small` o `text-embedding-3-large`) |
 | Base de datos vectorial | Supabase (pgvector) |
 | Base de datos de usuarios | Supabase (tablas relacionales: usuarios, créditos, pagos) |
-| Pagos | Flow (principal) o Mercado Pago (alternativa) |
+| Pagos | Flow (flow.cl) |
 | Documentos jurídicos | Leyes chilenas, dictámenes de Contraloría General de la República, reglamentos |
 
 ## Despliegue e Infraestructura
@@ -109,7 +109,7 @@ Flujo principal de conversación con todas las guardas de seguridad y control de
 3. **Lookup de usuario**: Buscar en Supabase por número de teléfono; si no existe, crear registro con 3 créditos gratuitos
 4. **Control de créditos**:
    - Si `creditos > 0` → continuar
-   - Si `creditos == 0` → enviar mensaje de pago por WhatsApp con link de Flow/Mercado Pago y terminar
+   - Si `creditos == 0` → enviar mensaje de pago por WhatsApp con link de Flow y terminar
 5. **Sanitización de la pregunta**: Pasar por OpenAI con un prompt de limpieza y normalización (corregir ortografía, redactar correctamente, eliminar groserías, detectar intenciones no legales)
 6. **Detección de prompt injection**: Verificar si la pregunta sanitizada intenta manipular el sistema → bloquear y registrar
 7. **Embedding**: Generar vector de la pregunta limpia con OpenAI
@@ -121,7 +121,7 @@ Flujo principal de conversación con todas las guardas de seguridad y control de
 13. **Respuesta**: Enviar respuesta formateada al usuario por WhatsApp
 
 ### Workflow: `lexiora-payment-webhook`
-Procesa la confirmación de pago entrante desde Flow o Mercado Pago:
+Procesa la confirmación de pago entrante desde Flow:
 
 1. **Trigger**: Webhook de confirmación de pago
 2. **Validación de firma**: Verificar que el webhook proviene del proveedor de pagos (HMAC / token secreto)
@@ -317,7 +317,7 @@ CREATE TABLE usuarios (
 CREATE TABLE pagos (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   usuario_id UUID REFERENCES usuarios(id),
-  proveedor VARCHAR(20) NOT NULL,        -- 'flow' | 'mercadopago'
+  proveedor VARCHAR(20) NOT NULL,        -- 'flow'
   monto INT NOT NULL,                    -- en CLP
   creditos_otorgados INT NOT NULL,
   referencia_externa VARCHAR(100),       -- ID de la orden en el proveedor
@@ -331,38 +331,39 @@ CREATE TABLE pagos (
 - **Al quedar ≤ 3 créditos**: aviso al final de la respuesta ("Te quedan X consultas disponibles")
 - **Al recibir pago confirmado**: mensaje de bienvenida con saldo actualizado
 
-## Integración de Pagos — Mercado Pago
+## Integración de Pagos — Flow
 
-El proyecto usa **Mercado Pago** como procesador de pagos.
+El proyecto usa **Flow** (flow.cl) como procesador de pagos en Chile.
 
 **Flujo de pago en n8n:**
 ```
-[n8n] POST /checkout/preferences → Mercado Pago API
-      { items, external_reference: usuario_id, notification_url, back_urls }
-      ← { init_point }   ← URL de pago que se envía al usuario
+[n8n] POST /payment/create → Flow API  (parámetros firmados con HMAC-SHA256)
+      ← { url, token }   ← URL de pago = url + "?token=" + token
 
-[n8n] → Enviar init_point al usuario por WhatsApp
+[n8n] → Enviar paymentUrl al usuario por WhatsApp
 
-[MP]  → Webhook POST a /webhook/payment cuando el pago se procesa
-        { type: "payment", data: { id: "12345" } }
+[Flow] → Webhook POST a /webhook/payment cuando el pago se procesa
+         { token, status, commerceOrder, ... }
 
-[n8n] → GET /v1/payments/12345 → obtiene status y external_reference
-      → Si status == "approved" → acreditar créditos
+[n8n] → GET /payment/getStatus?token=... → obtiene status y commerceOrder
+       → Si status == 2 (pagado) → acreditar créditos
 ```
 
-**Validación de webhooks:** Mercado Pago firma cada notificación con HMAC-SHA256.
-El secret se obtiene en MP → Tu negocio → Notificaciones IPN → Clave secreta.
-El manifest a firmar es: `id:{paymentId};request-id:{x-request-id};ts:{ts}`
+**Validación de webhooks:** Flow firma cada notificación con HMAC-SHA256.
+Se firma concatenando los parámetros ordenados alfabéticamente (clave+valor) con la `FLOW_SECRET_KEY`.
+
+**Status codes de Flow:** 1=pendiente, 2=pagado, 3=rechazado, 4=anulado
 
 ### Variables de entorno de pagos
 ```
-MP_ACCESS_TOKEN=APP_USR-...   # usar TEST-... para sandbox
-MP_WEBHOOK_SECRET=...         # para validar firma HMAC de webhooks
+FLOW_API_KEY=...              # clave pública de Flow
+FLOW_SECRET_KEY=...           # clave privada para firmar HMAC-SHA256
+FLOW_API_URL=https://sandbox.flow.cl/api   # sandbox; producción: https://www.flow.cl/api
 PRECIO_CLP=2990               # precio del paquete de 20 créditos en CLP
 ```
 
-**Sandbox:** En MP → Tu negocio → Credenciales, usar las credenciales de "Pruebas" (prefijo `TEST-`).
-Las tarjetas de prueba están en: developers.mercadopago.com/es/docs/checkout-pro/additional-content/test-cards
+**Sandbox:** En Flow → Mi cuenta → Integración, solicitar acceso al ambiente de pruebas.
+Las credenciales de sandbox son independientes de las de producción.
 
 ## Seguridad: Sanitización y Anti Prompt Injection
 

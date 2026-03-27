@@ -16,7 +16,7 @@ Al final de cada sección encontrará el dato exacto que debe anotar y entregar 
 | 3 | OpenAI | La inteligencia artificial que responde | Según uso (~$20-50 USD/mes) |
 | 4 | Supabase | Base de datos (ya lo tiene) | Gratis hasta cierto límite |
 | 5 | WhatsApp Business API | Canal de mensajería | Gratis hasta 1,000 conversaciones/mes |
-| 6 | Mercado Pago | Recibir pagos de sus clientes en Chile | ~3.49% por transacción |
+| 6 | Flow | Recibir pagos de sus clientes en Chile | ~2% por transacción |
 
 ---
 
@@ -173,33 +173,33 @@ WHATSAPP_PHONE_NUMBER_ID=123456789012345
 
 ---
 
-## PASO 6 — Crear cuenta en Mercado Pago (pagos)
+## PASO 6 — Crear cuenta en Flow (pagos)
 
-Mercado Pago permite recibir pagos con tarjetas de crédito, débito y transferencias.
+Flow permite recibir pagos con Webpay, tarjetas de crédito, débito y transferencias bancarias en Chile.
 
-**6.1** Vaya a [mercadopago.cl](https://www.mercadopago.cl) y haga clic en **"Crear cuenta"**
+**6.1** Vaya a [flow.cl](https://www.flow.cl) y haga clic en **"Regístrate"**
 
-**6.2** Regístrese con su correo y RUT chileno
+**6.2** Seleccione el tipo de cuenta y complete el registro con su RUT
 
-**6.3** Para poder cobrar dinero real, complete la verificación de identidad:
-- Foto de su carnet de identidad (ambos lados)
-- Datos bancarios para recibir los depósitos
-- Este proceso puede tomar 1-3 días hábiles
+**6.3** Complete la verificación de identidad para poder cobrar dinero real:
+- Datos de la empresa o persona natural
+- Cuenta bancaria para recibir los depósitos
+- Este proceso puede tomar 1-2 días hábiles
 
-**6.4** Una vez creada la cuenta, obtenga sus credenciales:
-- Vaya al panel de Mercado Pago → **"Tu negocio"** → **"Credenciales"**
-- Verá dos secciones: **"Credenciales de prueba"** (para testear sin cobrar) y **"Credenciales de producción"** (para cobros reales)
-- Copie el **Access Token** de prueba (empieza con `TEST-`) para comenzar
+**6.4** Una vez aprobada la cuenta, obtenga sus credenciales:
+- Vaya a **Mi cuenta** → **"Integración"** o **"API"**
+- Copie la **API Key** (clave pública) y la **Secret Key** (clave privada)
 
-**6.5** Configurar la clave secreta de webhooks:
-- En el mismo panel → **"Tu negocio"** → **"Notificaciones IPN"**
-- Active las notificaciones y copie la **Clave secreta** que aparece
+**6.5** Para pruebas sin cobrar dinero real, solicite acceso al **Sandbox**:
+- En el mismo panel busque **"Ambiente de pruebas"** o **"Sandbox"**
+- Le entregarán credenciales separadas para desarrollo
 
 **📋 Datos a guardar y entregar al desarrollador:**
 ```
-MP_ACCESS_TOKEN=TEST-XXXXXXXXXXXXXXXXXXXX   ← pruebas (empieza con TEST-)
-# MP_ACCESS_TOKEN=APP_USR-XXXXXXXXXXXX     ← producción (cambiar cuando esté listo)
-MP_WEBHOOK_SECRET=YYYYYYYYYYYYYYYY
+FLOW_API_KEY=XXXXXXXXXXXXXXXX
+FLOW_SECRET_KEY=YYYYYYYYYYYYYYYY
+FLOW_API_URL=https://sandbox.flow.cl/api   ← para pruebas
+# FLOW_API_URL=https://www.flow.cl/api    ← cambiar cuando esté listo para producción
 ```
 
 ---
@@ -251,9 +251,9 @@ SUPABASE_SERVICE_KEY=    eyJ...
 WHATSAPP_API_TOKEN=      EAA...
 WHATSAPP_PHONE_NUMBER_ID= 123456...
 
-# ── Mercado Pago ──────────────────────────────────
-MP_ACCESS_TOKEN=         TEST-... (pruebas) o APP_USR-... (producción)
-MP_WEBHOOK_SECRET=       ...
+# ── Flow ──────────────────────────────────────────
+FLOW_API_KEY=            ...
+FLOW_SECRET_KEY=         ...
 
 # ── n8n ───────────────────────────────────────────
 N8N_USER=                ...
@@ -278,4 +278,4 @@ Cada servicio tiene su propio proceso de recuperación. Guarde todo en un gestor
 Sí, basta con cambiar el valor `PRECIO_CLP` y reiniciar el sistema. El desarrollador le explicará cómo.
 
 **¿El desarrollador podrá ver mis contraseñas?**
-Las contraseñas viven en su servidor. El desarrollador tiene acceso técnico al servidor para configurarlo, pero una vez entregado el sistema puede revocar ese acceso. Las API keys de OpenAI, Supabase y Mercado Pago están bajo su control directo en cada plataforma.
+Las contraseñas viven en su servidor. El desarrollador tiene acceso técnico al servidor para configurarlo, pero una vez entregado el sistema puede revocar ese acceso. Las API keys de OpenAI, Supabase y Flow están bajo su control directo en cada plataforma.
