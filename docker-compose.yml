@@ -13,6 +13,7 @@ services:
       - WEBHOOK_URL=${N8N_WEBHOOK_URL}
       - GENERIC_TIMEZONE=America/Santiago
       - N8N_LOG_LEVEL=warn
+      - NODE_FUNCTION_ALLOW_BUILTIN=fs,path,crypto
 
       # ── Variables de negocio (accesibles como $env.XXX en los workflows) ──
       # OpenAI y WhatsApp se configuran en n8n → Credentials (quedan cifradas)
@@ -25,6 +26,7 @@ services:
       - PRECIO_CLP=${PRECIO_CLP}
     volumes:
       - n8n_data:/home/node/.n8n
+      - ./documentos_ejemplo:/data/documentos_ejemplo
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:5678/healthz"]
       interval: 30s

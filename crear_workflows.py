@@ -891,150 +891,296 @@ def build_workflow_payment():
 # WORKFLOW 3: lexiora-ingest
 # ─────────────────────────────────────────────
 
-JS_LEER_JSON = r"""
-// Lee el JSON generado por preparar_documentos.py
-// El chunking ya fue hecho por el script Python — aquí solo se carga el archivo.
-const fs = require('fs');
+JS_PARSEAR_CHAT = r"""
+// Parsea la metadata del mensaje del chat y pasa el PDF adjunto al siguiente nodo.
+//
+// El usuario escribe en el chat (en una línea o varias):
+//   fuente: Código del Trabajo | numero: DFL-1 | materia: derecho_laboral
+//   fuente: Código del Trabajo | numero: DFL-1 | materia: derecho_laboral | fecha: 2024-01-15
+//
+// Campos:
+//   fuente  (obligatorio) — nombre completo de la ley/norma
+//   numero  (opcional)   — número del instrumento (DFL-1, Ley 20.744, etc.)
+//   materia (opcional)   — categoría temática (derecho_laboral, derecho_civil, etc.)
+//   fecha   (opcional)   — fecha del instrumento (YYYY-MM-DD); por defecto hoy
 
-// ─── AJUSTAR ESTA RUTA ──────────────────────────────────────────────────────
-// Apuntar al JSON generado por preparar_documentos.py.
-// Ejemplos:
-//   '/data/documentos/codigo_trabajo.json'          (Linux, ruta absoluta)
-//   './documentos_ejemplo/ejemplo_legal.json'        (relativa al proceso n8n)
-const RUTA_JSON = './documentos_ejemplo/ejemplo_legal.json';
-// ────────────────────────────────────────────────────────────────────────────
+const item = $input.first();
+const chatInput = (item.json.chatInput || '').trim();
+const sessionId  = item.json.sessionId  || '';
 
-let documentos;
-try {
-  const contenido = fs.readFileSync(RUTA_JSON, 'utf-8');
-  documentos = JSON.parse(contenido);
-} catch (e) {
+function parse(text, field) {
+  const re = new RegExp(field + '\\s*:\\s*([^|\\n]+)', 'i');
+  const m  = text.match(re);
+  return m ? m[1].trim() : null;
+}
+
+const fuente  = parse(chatInput, 'fuente');
+const numero  = parse(chatInput, 'numero')  || '';
+const materia = parse(chatInput, 'materia') || 'general';
+const fecha   = parse(chatInput, 'fecha')   || new Date().toISOString().split('T')[0];
+
+if (!fuente) {
   throw new Error(
-    `No se pudo leer: ${RUTA_JSON}\n` +
-    `Error: ${e.message}\n` +
-    `Verifica la ruta y que el archivo exista.`
+    'Falta el campo "fuente".\n' +
+    'Escribe algo como:\n' +
+    'fuente: Código del Trabajo | numero: DFL-1 | materia: derecho_laboral\n\n' +
+    '(y adjunta el PDF en el mismo mensaje)'
   );
 }
 
-if (!Array.isArray(documentos)) {
-  throw new Error('El JSON debe contener un array de documentos [{content, metadata}, ...]');
+// Pasar el binary (el PDF adjunto) al nodo siguiente
+return [{
+  json: { fuente, numero, materia, fecha, sessionId },
+  ...(item.binary && { binary: item.binary })
+}];
+""".strip()
+
+JS_CHUNKING_PDF = r"""
+// Divide el texto extraído del PDF en chunks y añade la metadata del chat.
+//
+// Estrategia de división:
+//   1. Primero intenta separar por artículos (Art. N°X / Artículo X)
+//   2. Si no encuentra artículos, divide por tamaño (~900 chars) con overlap
+
+const textoCompleto = ($json.text || '').trim();
+const meta = $('Parsear Metadata').first().json;
+
+if (textoCompleto.length < 50) {
+  throw new Error(
+    'No se pudo extraer texto del PDF.\n' +
+    'Asegúrate de que el PDF tenga texto seleccionable (no sea una imagen escaneada).'
+  );
 }
 
-console.log(`Cargados ${documentos.length} chunks desde ${RUTA_JSON}`);
+const CHUNK_SIZE = 900;
+const OVERLAP    = 100;
 
-return documentos
-  .filter(doc => doc.content && doc.content.length >= 100)
-  .map(doc => ({ json: { content: doc.content, metadata: doc.metadata || {} } }));
+// Intento 1: separar por artículos
+const reArticulo = /(?=Art(?:ículo|\.)\s*(?:N[°º]?\s*)?\d+)/gi;
+let chunks = textoCompleto.split(reArticulo).map(s => s.trim()).filter(s => s.length >= 80);
+
+// Intento 2: si hay 1 o ningún chunk, dividir por tamaño
+if (chunks.length <= 1) {
+  chunks = [];
+  let pos = 0;
+  while (pos < textoCompleto.length) {
+    let fin = Math.min(pos + CHUNK_SIZE, textoCompleto.length);
+    if (fin < textoCompleto.length) {
+      const salto  = textoCompleto.lastIndexOf('\n\n', fin);
+      const punto  = textoCompleto.lastIndexOf('. ',  fin);
+      const corte  = Math.max(salto, punto);
+      if (corte > pos + CHUNK_SIZE * 0.5) fin = (corte === salto ? corte : corte + 1);
+    }
+    const chunk = textoCompleto.slice(pos, fin).trim();
+    if (chunk.length >= 80) chunks.push(chunk);
+    pos = fin - OVERLAP;
+    if (fin >= textoCompleto.length) break;
+  }
+}
+
+if (chunks.length === 0) {
+  throw new Error('No se generaron chunks del PDF. Verifica el archivo.');
+}
+
+console.log(`[Lexiora Ingest] ${chunks.length} chunks generados de "${meta.fuente}"`);
+
+return chunks.map((content, i) => ({
+  json: {
+    content,
+    metadata: {
+      fuente:       meta.fuente,
+      numero:       meta.numero  || null,
+      materia:      meta.materia || 'general',
+      fecha:        meta.fecha,
+      chunk_index:  i,
+      total_chunks: chunks.length
+    }
+  }
+}));
 """.strip()
 
 JS_GUARDAR_DOCUMENTOS = r"""
-// Guarda los chunks con embeddings en Supabase pgvector
-const items = $input.all();
+// Combina los embeddings generados con los chunks originales y los guarda en Supabase.
+// items[i]  → respuesta OpenAI con el embedding del chunk i
+// chunks[i] → content + metadata del chunk i (del nodo "Chunking por Artículos")
+
+const items     = $input.all();
+const chunks    = $('Chunking por Artículos').all();
 const supabaseUrl = $env.SUPABASE_URL;
 const supabaseKey = $env.SUPABASE_SERVICE_KEY;
 const headers = {
-  'apikey': supabaseKey,
+  'apikey':        supabaseKey,
   'Authorization': `Bearer ${supabaseKey}`,
-  'Content-Type': 'application/json',
-  'Prefer': 'return=minimal'
+  'Content-Type':  'application/json',
+  'Prefer':        'return=minimal'
 };
 
-let saved = 0;
+let saved  = 0;
 let errors = 0;
 
-for (const item of items) {
+for (let i = 0; i < items.length; i++) {
   try {
+    const embedding = items[i].json.data?.[0]?.embedding;
+    const chunk     = chunks[i]?.json;
+
+    if (!embedding) throw new Error(`Sin embedding para chunk ${i}`);
+    if (!chunk)     throw new Error(`Chunk ${i} no encontrado`);
+
     await $helpers.httpRequest({
       method: 'POST',
-      url: `${supabaseUrl}/rest/v1/documents`,
+      url:    `${supabaseUrl}/rest/v1/documents`,
       headers,
-      body: JSON.stringify({
-        content: item.json.content,
-        metadata: item.json.metadata,
-        embedding: item.json.embedding
-      })
+      body:   JSON.stringify({ content: chunk.content, metadata: chunk.metadata, embedding })
     });
     saved++;
   } catch (e) {
-    console.error(`Error guardando chunk: ${e.message}`);
+    console.error(`[Lexiora Ingest] Error chunk ${i}: ${e.message}`);
     errors++;
   }
 }
 
+console.log(`[Lexiora Ingest] Guardados ${saved}/${items.length} chunks`);
 return [{ json: { saved, errors, total: items.length } }];
 """.strip()
 
 def build_workflow_ingest():
+    # Workflow de ingesta vía Chat de n8n.
+    # Flujo:
+    #   Chat Trigger  →  Parsear Metadata  →  Extraer Texto PDF
+    #   →  Chunking por Artículos  →  Generar Embeddings (por chunk)
+    #   →  Guardar en Supabase (todos)  →  Respuesta Chat
+    #
+    # Uso:
+    #   1. Abrir https://n8n.lexiora.cl/webhook/<id>/chat
+    #   2. Escribir: fuente: Código del Trabajo | numero: DFL-1 | materia: derecho_laboral
+    #   3. Adjuntar el PDF en el mismo mensaje y enviar.
+
+    EMBEDDING_BODY = (
+        '={{ JSON.stringify({'
+        ' model: "text-embedding-3-small",'
+        ' input: $json.content'
+        ' }) }}'
+    )
+    RESPUESTA_EXPR = (
+        "={{ '✅ ' + $json.saved + ' chunks de \"'"
+        " + $('Parsear Metadata').first().json.fuente + '\" guardados en Supabase.'"
+        " + ($json.errors > 0"
+        "   ? ' ⚠️ ' + $json.errors + ' chunks fallaron.'"
+        "   : '') }}"
+    )
+
     nodes = [
-        # 1. Trigger manual
+        # 1. Chat Trigger — expone la interfaz de chat en /webhook/<id>/chat
         {
-            "name": "Trigger Manual",
-            "type": "n8n-nodes-base.manualTrigger",
+            "name": "Chat Trigger",
+            "type": "@n8n/n8n-nodes-langchain.chatTrigger",
             "typeVersion": 1,
             "position": [250, 300],
-            "parameters": {}
+            "parameters": {
+                "public": False,
+                "options": {
+                    "allowFileUploads": True,
+                    "allowedFilesMimeTypes": "application/pdf"
+                }
+            },
+            "webhookId": "lexiora-ingest-chat"
         },
-        # 2. Code: Leer el JSON generado por preparar_documentos.py
-        # El chunking ya fue hecho por el script Python.
-        # Ajustar RUTA_JSON dentro del código del nodo antes de ejecutar.
+        # 2. Code: Parsear la metadata del mensaje del chat
+        #    El PDF adjunto se pasa como binary al siguiente nodo.
         {
-            "name": "Leer Documentos JSON",
+            "name": "Parsear Metadata",
             "type": "n8n-nodes-base.code",
             "typeVersion": 2,
             "position": [500, 300],
-            "parameters": {"mode": "runOnceForAllItems", "jsCode": JS_LEER_JSON}
+            "parameters": {
+                "mode": "runOnceForAllItems",
+                "jsCode": JS_PARSEAR_CHAT
+            }
         },
-        # 3. HTTP: Generar embeddings por chunk (proceso por item)
+        # 3. Extract from File: extrae el texto del PDF adjunto
+        #    Requiere que el PDF tenga texto seleccionable (no imagen escaneada).
+        {
+            "name": "Extraer Texto PDF",
+            "type": "n8n-nodes-base.extractFromFile",
+            "typeVersion": 1,
+            "position": [750, 300],
+            "parameters": {
+                "operation": "pdf",
+                "binaryPropertyName": "data"
+            }
+        },
+        # 4. Code: Divide el texto en chunks por artículos (o por tamaño)
+        #    y añade la metadata parseada en el paso 2.
+        {
+            "name": "Chunking por Artículos",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [1000, 300],
+            "parameters": {
+                "mode": "runOnceForAllItems",
+                "jsCode": JS_CHUNKING_PDF
+            }
+        },
+        # 5. HTTP Request: genera el embedding de cada chunk (un item por chunk)
+        #    Usa la credencial "OpenAI Lexiora" configurada en n8n → Credentials.
         {
             "name": "Generar Embeddings",
             "type": "n8n-nodes-base.httpRequest",
             "typeVersion": 4,
-            "position": [1000, 300],
+            "position": [1250, 300],
             "parameters": {
                 "method": "POST",
                 "url": "https://api.openai.com/v1/embeddings",
-                "sendHeaders": True,
-                "headerParameters": headers_openai(),
+                "authentication": "predefinedCredentialType",
+                "nodeCredentialType": "openAiApi",
                 "sendBody": True,
                 "contentType": "raw",
                 "rawContentType": "application/json",
-                "body": '={{ JSON.stringify({ model: "text-embedding-3-small", input: $json.content }) }}'
+                "body": EMBEDDING_BODY
             }
         },
-        # 5. Set: Preparar item para Supabase (contenido + embedding)
-        {
-            "name": "Preparar para Supabase",
-            "type": "n8n-nodes-base.set",
-            "typeVersion": 3,
-            "position": [1250, 300],
-            "parameters": {
-                "mode": "manual",
-                "duplicateItem": False,
-                "assignments": {
-                    "assignments": [
-                        {"id": "1", "name": "content", "value": "={{ $('Leer Documentos JSON').item.json.content }}", "type": "string"},
-                        {"id": "2", "name": "metadata", "value": "={{ $('Leer Documentos JSON').item.json.metadata }}", "type": "object"},
-                        {"id": "3", "name": "embedding", "value": "={{ $json.data[0].embedding }}", "type": "array"}
-                    ]
-                },
-                "options": {}
-            }
-        },
-        # 6. Code: Guardar en Supabase
+        # 6. Code: Combina embeddings con chunks y guarda en Supabase pgvector
         {
             "name": "Guardar en Supabase",
             "type": "n8n-nodes-base.code",
             "typeVersion": 2,
             "position": [1500, 300],
-            "parameters": {"mode": "runOnceForAllItems", "jsCode": JS_GUARDAR_DOCUMENTOS}
+            "parameters": {
+                "mode": "runOnceForAllItems",
+                "jsCode": JS_GUARDAR_DOCUMENTOS
+            }
+        },
+        # 7. Set: Responde al chat con el resumen de la operación
+        {
+            "name": "Respuesta Chat",
+            "type": "n8n-nodes-base.set",
+            "typeVersion": 3,
+            "position": [1750, 300],
+            "parameters": {
+                "mode": "manual",
+                "duplicateItem": False,
+                "assignments": {
+                    "assignments": [
+                        {
+                            "id": "1",
+                            "name": "output",
+                            "value": RESPUESTA_EXPR,
+                            "type": "string"
+                        }
+                    ]
+                },
+                "options": {}
+            }
         },
     ]
 
     connections = {
-        "Trigger Manual":          {"main": [[{"node": "Leer Documentos JSON", "type": "main", "index": 0}]]},
-        "Leer Documentos JSON":    {"main": [[{"node": "Generar Embeddings", "type": "main", "index": 0}]]},
-        "Generar Embeddings":   {"main": [[{"node": "Preparar para Supabase", "type": "main", "index": 0}]]},
-        "Preparar para Supabase":  {"main": [[{"node": "Guardar en Supabase", "type": "main", "index": 0}]]},
+        "Chat Trigger":           {"main": [[{"node": "Parsear Metadata",     "type": "main", "index": 0}]]},
+        "Parsear Metadata":       {"main": [[{"node": "Extraer Texto PDF",    "type": "main", "index": 0}]]},
+        "Extraer Texto PDF":      {"main": [[{"node": "Chunking por Artículos","type": "main", "index": 0}]]},
+        "Chunking por Artículos": {"main": [[{"node": "Generar Embeddings",   "type": "main", "index": 0}]]},
+        "Generar Embeddings":     {"main": [[{"node": "Guardar en Supabase",  "type": "main", "index": 0}]]},
+        "Guardar en Supabase":    {"main": [[{"node": "Respuesta Chat",       "type": "main", "index": 0}]]},
     }
 
     return {
