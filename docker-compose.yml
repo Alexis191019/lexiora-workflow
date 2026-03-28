@@ -15,8 +15,10 @@ services:
       - N8N_LOG_LEVEL=warn
 
       # ── Variables de negocio (accesibles como $env.XXX en los workflows) ──
-      # OpenAI, Supabase y WhatsApp NO van aquí — se configuran en
-      # n8n → Credentials → Add credential (quedan cifradas con N8N_ENCRYPTION_KEY)
+      # OpenAI y WhatsApp se configuran en n8n → Credentials (quedan cifradas)
+      # Supabase y Flow van aquí porque los nodos Code los leen con $env
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
       - FLOW_API_KEY=${FLOW_API_KEY}
       - FLOW_SECRET_KEY=${FLOW_SECRET_KEY}
       - FLOW_API_URL=${FLOW_API_URL}
