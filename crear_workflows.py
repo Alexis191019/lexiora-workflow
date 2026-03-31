@@ -1098,6 +1098,7 @@ def build_workflow_ingest():
             }
         },
         # 3. Extract from File: extrae el texto del PDF adjunto
+        #    El Chat Trigger nombra el primer archivo adjunto "data0" (no "data").
         #    Requiere que el PDF tenga texto seleccionable (no imagen escaneada).
         {
             "name": "Extraer Texto PDF",
@@ -1106,7 +1107,7 @@ def build_workflow_ingest():
             "position": [750, 300],
             "parameters": {
                 "operation": "pdf",
-                "binaryPropertyName": "data"
+                "binaryPropertyName": "data0"
             }
         },
         # 4. Code: Divide el texto en chunks por artículos (o por tamaño)

@@ -14,6 +14,7 @@ services:
       - GENERIC_TIMEZONE=America/Santiago
       - N8N_LOG_LEVEL=warn
       - NODE_FUNCTION_ALLOW_BUILTIN=fs,path,crypto
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
 
       # ── Variables de negocio (accesibles como $env.XXX en los workflows) ──
       # OpenAI y WhatsApp se configuran en n8n → Credentials (quedan cifradas)
