@@ -59,18 +59,17 @@ Usuario (WhatsApp)
 
 ```
 lexiora-workflow/
+├── setup.py                    # Importa los workflows en n8n vía API (un solo comando)
 ├── docker-compose.yml          # Levanta n8n en Docker
 ├── .env.example                # Plantilla de variables de entorno
+├── workflows/
+│   ├── lexiora-whatsapp-rag.json  # Workflow principal (RAG + WhatsApp)
+│   └── lexiora-ingest.json        # Workflow de ingesta de PDFs
 ├── nginx/
 │   └── lexiora.conf            # Configuración Nginx (reverse proxy + SSL)
 ├── sql/
-│   └── setup.sql               # Tablas, funciones RPC y índices en Supabase
-├── crear_workflows.py          # Crea los 3 workflows en n8n vía API
-├── preparar_documentos.py      # Convierte documentos legales a JSON con chunks
-├── documentos_ejemplo/
-│   ├── ejemplo_legal.json      # Chunks de leyes chilenas (formato de ingesta)
-│   └── ejemplo_enfermeria.json # Ejemplo de dominio alternativo
-├── GUIA_DESARROLLADOR.md       # Setup completo paso a paso para el desarrollador
+│   └── setup.sql               # Tablas, funciones RPC e índices en Supabase
+├── REFERENCIA_INGESTA.md       # Cómo usar el chat de ingesta (formato de campos)
 ├── GUIA_CREDENCIALES.md        # Guía para el cliente: cómo obtener cada credencial
 └── CLAUDE.md                   # Contexto del proyecto para Claude Code (IA)
 ```
@@ -82,17 +81,16 @@ lexiora-workflow/
 ### `lexiora-whatsapp-rag` — Flujo principal
 Recibe mensajes de WhatsApp, aplica el pipeline RAG y responde al usuario.
 
-**Pasos**: webhook → validar tipo → lookup usuario → control créditos → sanitizar pregunta → detectar injection → embedding → búsqueda vectorial → construir contexto → chat completion → descontar crédito → alerta créditos bajos → enviar respuesta
-
-### `lexiora-payment-webhook` — Confirmación de pagos
-Recibe el webhook de Flow cuando un pago se confirma y acredita los créditos.
-
-**Pasos**: webhook → validar firma HMAC-SHA256 → lookup usuario → acreditar +20 créditos → registrar en tabla `pagos` → notificar por WhatsApp
+**Pasos**: webhook → validar mensaje (filtra status events) → lookup/crear usuario → bienvenida si es nuevo → control créditos → descontar crédito → sanitizar pregunta → detectar injection → embedding → búsqueda vectorial → construir contexto → chat completion → alerta créditos bajos → enviar respuesta
 
 ### `lexiora-ingest` — Ingesta de documentos
-Vectoriza documentos jurídicos y los guarda en Supabase.
+Vectoriza documentos jurídicos y los guarda en Supabase via chat integrado en n8n.
 
-**Pasos**: trigger manual → leer JSON de `preparar_documentos.py` → embedding por chunk → guardar en `documents` con metadata
+**URL**: `https://n8n.lexiora.cl/webhook/lexiora-ingest-chat/chat`  
+**Pasos**: chat trigger → extraer PDF → chunks → embeddings → bulk insert en Supabase
+
+### Pagos — Next.js landing page
+Los pagos se procesan desde la landing page (`/pagar`), no desde n8n. Flow envía el webhook de confirmación directamente a Next.js (`/api/confirmar-pago`), que acredita los créditos en Supabase.
 
 ---
 
@@ -131,40 +129,29 @@ cd lexiora-workflow
 
 # 2. Crear el .env con las variables de infraestructura
 cp .env.example .env
-# Editar .env: N8N_USER, N8N_PASSWORD, N8N_ENCRYPTION_KEY,
-#              FLOW_API_KEY, FLOW_SECRET_KEY, PRECIO_CLP
+# Editar .env con todas las credenciales
 
-# 3. Crear tablas en Supabase
-# Ir a Supabase Dashboard → SQL Editor → pegar sql/setup.sql → Run
+# 3. Crear tablas y funciones RPC en Supabase
+# Supabase Dashboard → SQL Editor → pegar sql/setup.sql → Run
 
 # 4. Levantar n8n
 docker compose up -d
 # Panel disponible en http://localhost:5678
 
-# 5. Exponer webhook con ngrok (para WhatsApp)
-ngrok http 5678
-# Copiar la URL https://xxxx.ngrok-free.app → actualizar N8N_WEBHOOK_URL en .env
-# Reiniciar: docker compose restart
+# 5. Configurar credenciales en n8n → Credentials:
+#   - "OpenAI Lexiora"    → tipo: OpenAI API
+#   - "WhatsApp Lexiora"  → tipo: HTTP Header Auth (name: Authorization)
 
-# 6. Configurar credenciales en n8n
-# n8n → Credentials → Add credential:
-#   - "OpenAI API"    → API key de OpenAI       → nombre: "OpenAI Lexiora"
-#   - "Supabase API"  → URL + service role key   → nombre: "Supabase Lexiora"
-#   - "Header Auth"   → Bearer <WHATSAPP_TOKEN>  → nombre: "WhatsApp Lexiora"
+# 6. Crear la API Key de n8n
+# n8n → Settings → API → Create API Key → copiar el valor
 
-# 7. Crear los 3 workflows
-set N8N_API_KEY=<api-key-de-n8n>       # n8n → Settings → API → Create API Key
-set N8N_API_URL=http://localhost:5678
-python crear_workflows.py
-# Activar los workflows en n8n con el toggle
+# 7. Importar los workflows (un solo comando)
+set N8N_API_KEY=<api-key>           # Windows
+# export N8N_API_KEY=<api-key>      # Linux/Mac
+python setup.py
 
-# 8. Ingestar documentos de prueba
-pip install requests beautifulsoup4 pdfplumber python-docx
-python preparar_documentos.py \
-  --url "https://www.bcn.cl/leychile/navegar?idNorma=207436" \
-  --fuente "Código del Trabajo" --numero "DFL-1" \
-  --materia "derecho_laboral" --salida "codigo_trabajo.json"
-# Luego ejecutar lexiora-ingest manualmente en n8n
+# 8. Para desarrollo local, exponer con ngrok antes del paso 7
+# ngrok http 5678 → actualizar N8N_WEBHOOK_URL en .env → docker compose restart
 ```
 
 Ver [`GUIA_DESARROLLADOR.md`](GUIA_DESARROLLADOR.md) para el proceso completo incluyendo despliegue en producción.
@@ -198,31 +185,14 @@ El archivo `sql/setup.sql` crea toda la estructura necesaria:
 - `documents` — chunks de documentos jurídicos con embedding `vector(1536)`
 - `injection_attempts` — registro de intentos de prompt injection bloqueados
 
-**Funciones RPC**:
+**Funciones RPC** (todas en `LANGUAGE sql` para evitar ambigüedad de columnas):
+- `get_or_create_usuario(p_phone)` — upsert atómico; retorna `is_new=true` si fue recién creado
 - `descontar_credito(p_usuario_id)` — descuenta 1 crédito de forma atómica
+- `acreditar_creditos(p_usuario_id, p_creditos)` — suma créditos después de un pago
 - `match_documents(query_embedding, match_threshold, match_count)` — búsqueda vectorial por similitud coseno
 
 ---
 
-## Preparar documentos jurídicos
-
-`preparar_documentos.py` convierte documentos al formato JSON que consume `lexiora-ingest`. Detecta automáticamente artículos para leyes y usa chunking por tamaño para dictámenes.
-
-```bash
-# Desde la BCN (scraping automático)
-python preparar_documentos.py --url "https://www.bcn.cl/leychile/navegar?idNorma=..." \
-  --fuente "Nombre de la ley" --numero "Ley 20.123" --materia "materia"
-
-# Desde PDF (dictámenes de Contraloría)
-python preparar_documentos.py --pdf dictamen.pdf \
-  --fuente "Contraloría General de la República" --numero "12345/2024" --materia "administrativo"
-
-# Procesar carpeta completa de PDFs
-python preparar_documentos.py --carpeta ./dictamenes/ \
-  --fuente "Contraloría" --materia "administrativo"
-```
-
----
 
 ## Seguridad
 
@@ -276,6 +246,6 @@ git checkout dev
 
 ## Documentación adicional
 
-- [`GUIA_DESARROLLADOR.md`](GUIA_DESARROLLADOR.md) — Setup completo local y producción, paso a paso
-- [`GUIA_CREDENCIALES.md`](GUIA_CREDENCIALES.md) — Instrucciones para el cliente: cómo obtener cada credencial
-- [`CLAUDE.md`](CLAUDE.md) — Contexto completo del proyecto para sesiones con Claude Code
+- [`GUIA_CREDENCIALES.md`](GUIA_CREDENCIALES.md) — Para el cliente: cómo obtener cada credencial (OpenAI, WhatsApp, Flow, etc.)
+- [`REFERENCIA_INGESTA.md`](REFERENCIA_INGESTA.md) — Cómo usar el chat de ingesta: formato de campos y ejemplos
+- [`CLAUDE.md`](CLAUDE.md) — Contexto técnico completo del proyecto para sesiones con Claude Code

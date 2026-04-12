@@ -66,27 +66,54 @@ CREATE TABLE IF NOT EXISTS injection_attempts (
 );
 
 
+-- ── Función RPC: get_or_create_usuario ──────────────────────
+-- Upsert atómico: crea el usuario si no existe, actualiza ultimo_mensaje si existe.
+-- Retorna datos del usuario + is_new=true si fue recién creado.
+-- NOTA: usar LANGUAGE sql (no plpgsql) para evitar ambigüedad de columnas en RETURNS TABLE.
+DROP FUNCTION IF EXISTS get_or_create_usuario(TEXT);
+CREATE OR REPLACE FUNCTION get_or_create_usuario(p_phone TEXT)
+RETURNS TABLE(id UUID, phone TEXT, creditos INT, nombre TEXT, total_preguntas INT, is_new BOOLEAN)
+LANGUAGE sql SECURITY DEFINER
+AS $$
+  WITH upsert AS (
+    INSERT INTO usuarios AS u (phone, creditos, total_preguntas, ultimo_mensaje)
+    VALUES (p_phone, 3, 0, now())
+    ON CONFLICT (phone) DO UPDATE SET ultimo_mensaje = now()
+    RETURNING u.id, u.phone, u.creditos, u.nombre, u.total_preguntas, (xmax = 0) AS is_new
+  )
+  SELECT * FROM upsert;
+$$;
+
+
 -- ── Función RPC: descontar_credito ───────────────────────────
 -- Descuenta 1 crédito e incrementa total_preguntas de forma atómica.
--- Retorna el registro actualizado con el saldo restante.
+-- Retorna el saldo restante.
+-- NOTA: usar LANGUAGE sql (no plpgsql) para evitar ambigüedad de columnas.
+DROP FUNCTION IF EXISTS descontar_credito(UUID);
 CREATE OR REPLACE FUNCTION descontar_credito(p_usuario_id UUID)
-RETURNS TABLE(id UUID, phone VARCHAR, creditos INT, total_preguntas INT)
-LANGUAGE plpgsql
+RETURNS TABLE(creditos INT)
+LANGUAGE sql SECURITY DEFINER
 AS $$
-BEGIN
-  RETURN QUERY
   UPDATE usuarios
-  SET
-    creditos        = creditos - 1,
-    total_preguntas = total_preguntas + 1
-  WHERE usuarios.id = p_usuario_id
+  SET creditos        = creditos - 1,
+      total_preguntas = total_preguntas + 1
+  WHERE id = p_usuario_id
     AND creditos > 0
-  RETURNING
-    usuarios.id,
-    usuarios.phone,
-    usuarios.creditos,
-    usuarios.total_preguntas;
-END;
+  RETURNING creditos;
+$$;
+
+
+-- ── Función RPC: acreditar_creditos ──────────────────────────
+-- Suma créditos al usuario (después de un pago confirmado).
+DROP FUNCTION IF EXISTS acreditar_creditos(UUID, INT);
+CREATE OR REPLACE FUNCTION acreditar_creditos(p_usuario_id UUID, p_creditos INT)
+RETURNS TABLE(creditos INT)
+LANGUAGE sql SECURITY DEFINER
+AS $$
+  UPDATE usuarios
+  SET creditos = creditos + p_creditos
+  WHERE id = p_usuario_id
+  RETURNING creditos;
 $$;
 
 

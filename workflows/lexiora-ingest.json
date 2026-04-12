@@ -1,0 +1,339 @@
+{
+  "name": "lexiora-ingest",
+  "nodes": [
+    {
+      "parameters": {
+        "options": {
+          "allowFileUploads": true,
+          "allowedFilesMimeTypes": "application/pdf"
+        }
+      },
+      "name": "Chat Trigger",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1,
+      "position": [
+        -144,
+        272
+      ],
+      "webhookId": "lexiora-ingest-chat",
+      "id": "a62f7302-4aea-40d8-ab91-98b1cee06f26"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parsea la metadata del mensaje del chat y pasa el PDF adjunto al siguiente nodo.\n//\n// El usuario escribe en el chat (en una línea o varias):\n//   fuente: Código del Trabajo | numero: DFL-1 | materia: derecho_laboral\n//   fuente: Código del Trabajo | numero: DFL-1 | materia: derecho_laboral | fecha: 2024-01-15\n//\n// Campos:\n//   fuente  (obligatorio) — nombre completo de la ley/norma\n//   numero  (opcional)   — número del instrumento (DFL-1, Ley 20.744, etc.)\n//   materia (opcional)   — categoría temática (derecho_laboral, derecho_civil, etc.)\n//   fecha   (opcional)   — fecha del instrumento (YYYY-MM-DD); por defecto hoy\n\nconst item = $input.first();\nconst chatInput = (item.json.chatInput || '').trim();\nconst sessionId  = item.json.sessionId  || '';\n\nfunction parse(text, field) {\n  const re = new RegExp(field + '\\\\s*:\\\\s*([^|\\\\n]+)', 'i');\n  const m  = text.match(re);\n  return m ? m[1].trim() : null;\n}\n\nconst fuente  = parse(chatInput, 'fuente');\nconst numero  = parse(chatInput, 'numero')  || '';\nconst materia = parse(chatInput, 'materia') || 'general';\nconst fecha   = parse(chatInput, 'fecha')   || new Date().toISOString().split('T')[0];\n\nif (!fuente) {\n  throw new Error(\n    'Falta el campo \"fuente\".\\n' +\n    'Escribe algo como:\\n' +\n    'fuente: Código del Trabajo | numero: DFL-1 | materia: derecho_laboral\\n\\n' +\n    '(y adjunta el PDF en el mismo mensaje)'\n  );\n}\n\n// Pasar el binary (el PDF adjunto) al nodo siguiente\nreturn [{\n  json: { fuente, numero, materia, fecha, sessionId },\n  ...(item.binary && { binary: item.binary })\n}];"
+      },
+      "name": "Parsear Metadata",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        112,
+        272
+      ],
+      "id": "5f3affb6-1cfb-4005-9582-1f770d1096d5"
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "data0",
+        "options": {}
+      },
+      "name": "Extraer Texto PDF",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        352,
+        272
+      ],
+      "id": "e3c3982f-1fd3-4c31-9733-5ef127e2afd9"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Divide el texto extraído del PDF en chunks y añade la metadata del chat.\n//\n// Estrategia de división:\n//   1. Primero intenta separar por artículos (Art. N°X / Artículo X)\n//   2. Si no encuentra artículos, divide por tamaño (~900 chars) con overlap\n\nconst textoCompleto = ($json.text || '').trim();\nconst meta = $('Parsear Metadata').first().json;\n\nif (textoCompleto.length < 50) {\n  throw new Error(\n    'No se pudo extraer texto del PDF.\\n' +\n    'Asegúrate de que el PDF tenga texto seleccionable (no sea una imagen escaneada).'\n  );\n}\n\nconst CHUNK_SIZE = 900;\nconst OVERLAP    = 100;\n\n// Intento 1: separar por artículos\nconst reArticulo = /(?=Art(?:ículo|\\.)\\s*(?:N[°º]?\\s*)?\\d+)/gi;\nlet chunks = textoCompleto.split(reArticulo).map(s => s.trim()).filter(s => s.length >= 80);\n\n// Intento 2: si hay 1 o ningún chunk, dividir por tamaño\nif (chunks.length <= 1) {\n  chunks = [];\n  let pos = 0;\n  while (pos < textoCompleto.length) {\n    let fin = Math.min(pos + CHUNK_SIZE, textoCompleto.length);\n    if (fin < textoCompleto.length) {\n      const salto  = textoCompleto.lastIndexOf('\\n\\n', fin);\n      const punto  = textoCompleto.lastIndexOf('. ',  fin);\n      const corte  = Math.max(salto, punto);\n      if (corte > pos + CHUNK_SIZE * 0.5) fin = (corte === salto ? corte : corte + 1);\n    }\n    const chunk = textoCompleto.slice(pos, fin).trim();\n    if (chunk.length >= 80) chunks.push(chunk);\n    pos = fin - OVERLAP;\n    if (fin >= textoCompleto.length) break;\n  }\n}\n\nif (chunks.length === 0) {\n  throw new Error('No se generaron chunks del PDF. Verifica el archivo.');\n}\n\nconsole.log(`[Lexiora Ingest] ${chunks.length} chunks generados de \"${meta.fuente}\"`);\n\nreturn chunks.map((content, i) => ({\n  json: {\n    content,          // ← volver a content\n    metadata: {\n      fuente:       meta.fuente,\n      numero:       meta.numero  || null,\n      materia:      meta.materia || 'general',\n      fecha:        meta.fecha,\n      chunk_index:  i,\n      total_chunks: chunks.length\n    }\n  }\n}));\n"
+      },
+      "name": "Chunking por Artículos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        608,
+        272
+      ],
+      "id": "520e0872-26a2-4420-93dc-28385e1cc99d"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/embeddings",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ model: \"text-embedding-3-small\", input: $json.content }) }}\n",
+        "options": {}
+      },
+      "name": "Generar Embeddings",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        864,
+        272
+      ],
+      "id": "9da8c933-ea4e-4977-b9d6-256c54ddd0b2",
+      "credentials": {
+        "openAiApi": {
+          "id": "xBIMjCU1LhMlv8ex",
+          "name": "OpenAi Lexiora"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "name": "Respuesta Chat",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        2064,
+        304
+      ],
+      "id": "c860af79-28aa-4ab5-a359-0279b9c3b897"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "cd998993-558e-4512-8b4f-34d358c0c486",
+              "name": "=supabaseUrl",
+              "value": "={{ $env.SUPABASE_URL }}",
+              "type": "string"
+            },
+            {
+              "id": "814b4c59-3a65-49c4-b00f-bb3d8d5ce10a",
+              "name": "=supabaseKey",
+              "value": "={{ $env.SUPABASE_SERVICE_KEY }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1616,
+        320
+      ],
+      "id": "5bc730c3-bea6-4ac1-a811-b30510955171",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://uswzwvrsvfxplrnjqmav.supabase.co/rest/v1/documents\n\n",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Edit Fields').first().json.supabaseKey }}"
+            },
+            {}
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($('Edit Fields').first().json.items.map(i => ({\n  content: i.content,\n  metadata: i.metadata,\n  embedding: i.embedding\n}))) }}\n\n\n\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1856,
+        272
+      ],
+      "id": "0baf222d-a945-49f1-badf-7d6dd96e97f4",
+      "name": "Guardar en supabase",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "dOlwAdHIymkb3pUw",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "destinationFieldName": "items",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        1376,
+        320
+      ],
+      "id": "049cb9a1-4456-4750-abe2-be6369de544b",
+      "name": "Aggregate"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "3f844aca-16b6-4c3b-a6a2-02da6912e085",
+              "name": "content",
+              "value": "={{ $('Chunking por Artículos').item.json.content }}",
+              "type": "string"
+            },
+            {
+              "id": "a9a56569-4d24-4456-9f40-cd6d1966b43d",
+              "name": "metadata",
+              "value": "={{ $('Chunking por Artículos').item.json.metadata }}",
+              "type": "string"
+            },
+            {
+              "id": "ab5c2538-498f-4011-a041-35859a8041ff",
+              "name": "embedding",
+              "value": "={{ $json.data[0].embedding }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1104,
+        272
+      ],
+      "id": "388debcf-38f8-4f09-9e88-236a1af65ae9",
+      "name": "Fusionar Datos"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Chat Trigger": {
+      "main": [
+        [
+          {
+            "node": "Parsear Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parsear Metadata": {
+      "main": [
+        [
+          {
+            "node": "Extraer Texto PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extraer Texto PDF": {
+      "main": [
+        [
+          {
+            "node": "Chunking por Artículos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chunking por Artículos": {
+      "main": [
+        [
+          {
+            "node": "Generar Embeddings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generar Embeddings": {
+      "main": [
+        [
+          {
+            "node": "Fusionar Datos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "Guardar en supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar en supabase": {
+      "main": [
+        [
+          {
+            "node": "Respuesta Chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fusionar Datos": {
+      "main": [
+        [
+          {
+            "node": "Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timezone": "America/Santiago",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "6d0bc7d4-bf6b-40ba-adb0-9404517ad36b",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "9cad12f46c65ea2d2266000ead374bd95e23c6733c370770585416bf332ada27"
+  },
+  "id": "2PTzTVCuh8ps2jf0",
+  "tags": []
+}
